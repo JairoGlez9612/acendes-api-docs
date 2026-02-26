@@ -2,6 +2,24 @@
 
 ---
 
+## v1.2 — 2026-02-25
+
+Standard authentication and REST APIs for loans.
+
+### Changed
+- **Authentication:** Replaced XML-RPC `/xmlrpc/2/common` with standard `/web/session/authenticate` (JSON-RPC)
+- **Loans:** Replaced JSON-RPC direct model calls with REST API endpoints:
+  - `POST /api/v1/prestamos` (create)
+  - `POST /api/v1/prestamos/list` (new)
+  - `POST /api/v1/prestamos/get` (replaces read)
+  - `POST /api/v1/prestamos/movimientos` (new)
+  - `POST /api/v1/prestamos/amortizaciones` (replaces calcular + search_read)
+- Removed `calcular`, `ap02`, `ap03` (internal lifecycle, not public API)
+- Updated playground to handle both REST and JSON-RPC endpoints
+- All XML-RPC references removed throughout documentation
+
+---
+
 ## v1.1 — 2026-02-25
 
 Interactive documentation site with two-panel layout.
