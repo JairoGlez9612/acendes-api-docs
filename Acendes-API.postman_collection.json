@@ -52,17 +52,17 @@
       "name": "0. Autenticación",
       "item": [
         {
-          "name": "Login (obtener UID)",
+          "name": "Login (obtener UID y session_id)",
           "event": [
             {
               "listen": "test",
               "script": {
                 "exec": [
-                  "var jsonData = xml2Json(responseBody);",
-                  "var uid = jsonData.methodResponse.params.param.value.int;",
+                  "var jsonData = pm.response.json();",
+                  "var uid = jsonData.result.uid;",
                   "pm.collectionVariables.set('uid', uid);",
                   "pm.test('Login exitoso - UID obtenido', function() {",
-                  "    pm.expect(parseInt(uid)).to.be.above(0);",
+                  "    pm.expect(uid).to.be.above(0);",
                   "});"
                 ],
                 "type": "text/javascript"
@@ -74,15 +74,15 @@
             "header": [
               {
                 "key": "Content-Type",
-                "value": "text/xml"
+                "value": "application/json"
               }
             ],
             "body": {
               "mode": "raw",
-              "raw": "<?xml version=\"1.0\"?>\n<methodCall>\n  <methodName>authenticate</methodName>\n  <params>\n    <param><value><string>{{db}}</string></value></param>\n    <param><value><string>{{username}}</string></value></param>\n    <param><value><string>{{password}}</string></value></param>\n    <param><value><struct></struct></value></param>\n  </params>\n</methodCall>"
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"db\": \"{{db}}\",\n    \"login\": \"{{username}}\",\n    \"password\": \"{{password}}\"\n  },\n  \"id\": 1\n}"
             },
-            "url": "{{base_url}}/xmlrpc/2/common",
-            "description": "Autenticación XML-RPC. Retorna el UID que se usa en todas las llamadas posteriores."
+            "url": "{{base_url}}/web/session/authenticate",
+            "description": "Autenticación estándar de Odoo vía JSON-RPC. Retorna session_id y UID que se usan en todas las llamadas posteriores."
           }
         }
       ]

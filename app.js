@@ -11,7 +11,7 @@ const I18N = {
     required: 'requerido', optional: 'opcional',
     testIt: 'Probar', send: 'Enviar', sending: 'Enviando...',
     playground: 'API Playground',
-    corsError: 'El login XML-RPC no se puede ejecutar desde el navegador por restricciones CORS.\nUsar Postman, curl o un script.',
+    corsError: 'El login no se puede ejecutar desde el navegador por restricciones CORS.\nUsar Postman, curl o un script.',
     connError: 'Error de conexión',
     connHint: 'Verifica:\n- URL correcta\n- CORS habilitado\n- Servidor accesible',
     // Groups
@@ -39,7 +39,7 @@ const I18N = {
     ov_changelog: 'Changelog',
     ov_flow_title: 'Flujo Completo de Integración',
     ov_protocol: 'Protocolo: JSON-RPC',
-    ov_auth: 'Autenticación: UID + Password',
+    ov_auth: 'Autenticación: /web/session/authenticate',
     ov_format: 'Formato: JSON',
     // Reference pages
     ref_postman: 'Colección Postman',
@@ -54,7 +54,7 @@ const I18N = {
     required: 'required', optional: 'optional',
     testIt: 'Test it', send: 'Send', sending: 'Sending...',
     playground: 'API Playground',
-    corsError: 'XML-RPC login cannot be executed from the browser due to CORS restrictions.\nUse Postman, curl or a script.',
+    corsError: 'Login cannot be executed from the browser due to CORS restrictions.\nUse Postman, curl or a script.',
     connError: 'Connection error',
     connHint: 'Check:\n- Correct URL\n- CORS enabled\n- Server reachable',
     grp_overview: 'Overview', grp_auth: 'Authentication', grp_partner: 'Partner', grp_pld: 'AML',
@@ -79,7 +79,7 @@ const I18N = {
     ov_changelog: 'Changelog',
     ov_flow_title: 'Full Integration Flow',
     ov_protocol: 'Protocol: JSON-RPC',
-    ov_auth: 'Authentication: UID + Password',
+    ov_auth: 'Authentication: /web/session/authenticate',
     ov_format: 'Format: JSON',
     ref_postman: 'Postman Collection',
     ref_changelog: 'Changelog',
@@ -182,6 +182,80 @@ $response = json_decode(curl_exec($ch), true);
 ${resultLine}`;
 }
 
+// ── Helper: REST API code generators (session_id cookie auth) ──
+function restCurl(path, paramsStr) {
+  return `curl -X POST {base_url}${path} \\
+  -H "Content-Type: application/json" \\
+  -H "Cookie: session_id={session_id}" \\
+  -d '{
+  "jsonrpc": "2.0",
+  "method": "call",
+  "params": ${paramsStr},
+  "id": 1
+}'`;
+}
+
+function restPython(path, paramsDict, resultLine) {
+  return `import requests
+
+session = requests.Session()
+# Login first to get session_id cookie
+session.post("{base_url}/web/session/authenticate", json={
+    "jsonrpc": "2.0", "method": "call",
+    "params": {"db": "{db}", "login": "{username}", "password": "{password}"},
+    "id": 1
+})
+
+resp = session.post("{base_url}${path}", json={
+    "jsonrpc": "2.0",
+    "method": "call",
+    "params": ${paramsDict},
+    "id": 2
+})
+${resultLine}`;
+}
+
+function restJS(path, paramsObj, resultLine) {
+  return `// After login, use session cookie
+const resp = await fetch('{base_url}${path}', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Cookie': 'session_id={session_id}'
+  },
+  body: JSON.stringify({
+    jsonrpc: '2.0', method: 'call',
+    params: ${paramsObj},
+    id: 1
+  })
+});
+
+const data = await resp.json();
+${resultLine}`;
+}
+
+function restPHP(path, paramsArr, resultLine) {
+  return `<?php
+$payload = json_encode([
+    "jsonrpc" => "2.0",
+    "method" => "call",
+    "params" => ${paramsArr},
+    "id" => 1
+]);
+
+$ch = curl_init("{base_url}${path}");
+curl_setopt($ch, CURLOPT_POST, true);
+curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    "Content-Type: application/json",
+    "Cookie: session_id={session_id}"
+]);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+
+$response = json_decode(curl_exec($ch), true);
+${resultLine}`;
+}
+
 // ── Special pages (non-endpoint) ──
 const SPECIAL_PAGES = {
   'overview': true,
@@ -211,71 +285,114 @@ const ENDPOINTS = [
     group: { es: 'Autenticación', en: 'Authentication' },
     name: { es: 'Login', en: 'Login' },
     method: 'POST',
-    path: '{base_url}/xmlrpc/2/common',
+    path: '{base_url}/web/session/authenticate',
     desc: {
-      es: 'Autenticar y obtener UID. Este es el único endpoint que usa XML-RPC. Todas las demás llamadas usan JSON-RPC vía <code>/jsonrpc</code>.',
-      en: 'Authenticate and obtain UID. This is the only endpoint using XML-RPC. All other calls use JSON-RPC via <code>/jsonrpc</code>.'
+      es: 'Autenticar y obtener <code>session_id</code> y <code>uid</code>. Usa el endpoint estándar de Odoo vía JSON-RPC. El <code>uid</code> se usa en todas las llamadas posteriores a <code>/jsonrpc</code>.',
+      en: 'Authenticate and obtain <code>session_id</code> and <code>uid</code>. Uses Odoo\'s standard endpoint via JSON-RPC. The <code>uid</code> is used in all subsequent calls to <code>/jsonrpc</code>.'
     },
     fields: [
       { name: 'db', type: 'string', required: true, desc: { es: 'Nombre de la base de datos', en: 'Database name' } },
-      { name: 'username', type: 'string', required: true, desc: { es: 'Usuario API', en: 'API user' } },
+      { name: 'login', type: 'string', required: true, desc: { es: 'Usuario API', en: 'API user' } },
       { name: 'password', type: 'string', required: true, desc: { es: 'Contraseña o API key', en: 'Password or API key' } },
     ],
     responseFields: [
-      { name: 'result', type: 'integer', desc: { es: 'UID del usuario. Usar en todas las llamadas posteriores.', en: 'User UID. Use in all subsequent calls.' } },
+      { name: 'result.uid', type: 'integer', desc: { es: 'UID del usuario. Usar en todas las llamadas posteriores.', en: 'User UID. Use in all subsequent calls.' } },
+      { name: 'result.session_id', type: 'string', desc: { es: 'ID de sesión (también en cookie).', en: 'Session ID (also in cookie).' } },
+      { name: 'result.username', type: 'string', desc: { es: 'Nombre de usuario autenticado.', en: 'Authenticated username.' } },
+      { name: 'result.company_id', type: 'integer', desc: { es: 'ID de la empresa del usuario.', en: 'User company ID.' } },
     ],
     model: null,
     odooMethod: 'authenticate',
     codes: {
-      curl: `curl -X POST {base_url}/xmlrpc/2/common \\
-  -H "Content-Type: text/xml" \\
-  -d '<?xml version="1.0"?>
-<methodCall>
-  <methodName>authenticate</methodName>
-  <params>
-    <param><value>{db}</value></param>
-    <param><value>{username}</value></param>
-    <param><value>{password}</value></param>
-    <param><value><struct></struct></value></param>
-  </params>
-</methodCall>'`,
-      python: `import xmlrpc.client
+      curl: `curl -X POST {base_url}/web/session/authenticate \\
+  -H "Content-Type: application/json" \\
+  -d '{
+  "jsonrpc": "2.0",
+  "method": "call",
+  "params": {
+    "db": "{db}",
+    "login": "{username}",
+    "password": "{password}"
+  },
+  "id": 1
+}'`,
+      python: `import requests
 
 URL = "{base_url}"
 DB  = "{db}"
 USER = "{username}"
 PWD  = "{password}"
 
-common = xmlrpc.client.ServerProxy(f"{URL}/xmlrpc/2/common")
-uid = common.authenticate(DB, USER, PWD, {})
+session = requests.Session()
+resp = session.post(f"{URL}/web/session/authenticate", json={
+    "jsonrpc": "2.0",
+    "method": "call",
+    "params": {
+        "db": DB,
+        "login": USER,
+        "password": PWD
+    },
+    "id": 1
+})
+data = resp.json()
+uid = data["result"]["uid"]
 print(f"UID: {uid}")`,
-      javascript: `const xmlrpc = require('xmlrpc');
-
-const client = xmlrpc.createClient({
-  url: '{base_url}/xmlrpc/2/common'
+      javascript: `const resp = await fetch('{base_url}/web/session/authenticate', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    jsonrpc: '2.0',
+    method: 'call',
+    params: {
+      db: '{db}',
+      login: '{username}',
+      password: '{password}'
+    },
+    id: 1
+  })
 });
-
-client.methodCall('authenticate', [
-  '{db}', '{username}', '{password}', {}
-], (err, uid) => {
-  console.log('UID:', uid);
-});`,
+const data = await resp.json();
+console.log('UID:', data.result.uid);`,
       php: `<?php
-$url = "{base_url}/xmlrpc/2/common";
+$url = "{base_url}/web/session/authenticate";
 
-$client = ripcord::client($url);
-$uid = $client->authenticate(
-    "{db}", "{username}", "{password}", []
-);
+$payload = json_encode([
+    "jsonrpc" => "2.0",
+    "method" => "call",
+    "params" => [
+        "db" => "{db}",
+        "login" => "{username}",
+        "password" => "{password}"
+    ],
+    "id" => 1
+]);
+
+$ch = curl_init($url);
+curl_setopt($ch, CURLOPT_POST, true);
+curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+curl_setopt($ch, CURLOPT_HTTPHEADER, ["Content-Type: application/json"]);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+
+$resp = curl_exec($ch);
+$data = json_decode($resp, true);
+$uid = $data["result"]["uid"];
 echo "UID: " . $uid;`,
     },
     responseExample: {
-      success: `<?xml version="1.0"?>
-<methodResponse>
-  <params>
-    <param><value><int>42</int></value></param>
-  </params>
-</methodResponse>`,
+      success: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        result: {
+          uid: 42,
+          is_system: false,
+          is_admin: false,
+          user_context: { lang: "es_MX", tz: "America/Mexico_City" },
+          db: "my_database",
+          username: "user@api.com",
+          company_id: 1,
+          session_id: "a1b2c3d4e5f6..."
+        }
+      }, null, 2),
     },
   },
 
@@ -488,8 +605,8 @@ print(result[0]["vor_pld_nivel_riesgo"])`),
     callout: {
       type: 'warning',
       text: {
-        es: 'El método retorna <code>null</code>. Usar JSON-RPC, no XML-RPC. Leer el resultado con <code>read</code> en un paso separado.',
-        en: 'Method returns <code>null</code>. Use JSON-RPC, not XML-RPC. Read the result with <code>read</code> in a separate step.'
+        es: 'El método retorna <code>null</code>. Leer el resultado con <code>read</code> en un paso separado.',
+        en: 'Method returns <code>null</code>. Read the result with <code>read</code> in a separate step.'
       }
     },
     fields: [
@@ -574,20 +691,18 @@ echo "Scoring executed. Read result with 'read' method.";`),
   },
 
   // ════════════════════════════════════
-  // LOANS
+  // LOANS (REST API - vor_cartera)
   // ════════════════════════════════════
   {
     id: 'prestamo-crear',
     group: { es: 'Préstamos', en: 'Loans' },
     name: { es: 'Crear Préstamo', en: 'Create Loan' },
     method: 'POST',
-    path: '{base_url}/jsonrpc',
+    path: '{base_url}/api/v1/prestamos',
     desc: {
-      es: 'Crea un nuevo préstamo vinculado a un partner. Estado inicial: <code>0</code> (Borrador).',
-      en: 'Creates a new loan linked to a partner. Initial state: <code>0</code> (Draft).'
+      es: 'Crea un nuevo préstamo en cartera. Endpoint REST estándar con autenticación por <code>session_id</code> cookie.',
+      en: 'Creates a new loan in portfolio. Standard REST endpoint with <code>session_id</code> cookie authentication.'
     },
-    flow: ['create', 'calcular', 'ap02', 'ap03'],
-    flowActive: 0,
     fields: [
       { name: 'cliente', type: 'integer', required: true, desc: { es: '<code>partner_id</code> del cliente', en: '<code>partner_id</code> of the customer' } },
       { name: 'producto', type: 'integer', required: true, desc: { es: 'ID del producto (<code>vor.cre_productos</code>)', en: 'Product ID (<code>vor.cre_productos</code>)' } },
@@ -598,292 +713,307 @@ echo "Scoring executed. Read result with 'read' method.";`),
       { name: 'fecha_desembolso', type: 'date', required: true, desc: { es: 'Fecha desembolso <code>YYYY-MM-DD</code>', en: 'Disbursement date <code>YYYY-MM-DD</code>' } },
       { name: 'fecha_ini', type: 'date', required: true, desc: { es: 'Fecha primer pago <code>YYYY-MM-DD</code>', en: 'First payment date <code>YYYY-MM-DD</code>' } },
       { name: 'tipo_interes', type: 'string', required: true, desc: { es: 'Método de cálculo. <code>"0"</code> = 30/360 Pagos Iguales (más común)', en: 'Calculation method. <code>"0"</code> = 30/360 Equal Payments (most common)' } },
-      { name: 'tipo_calculo', type: 'string', required: true, desc: { es: '<code>"0"</code> Calcular Pago, <code>"1"</code> Calcular Fecha Fin', en: '<code>"0"</code> Calculate Payment, <code>"1"</code> Calculate End Date' } },
-      { name: 'subproducto', type: 'integer', required: false, desc: { es: 'ID subproducto. Aplica defaults automáticamente', en: 'Subproduct ID. Applies defaults automatically' } },
-      { name: 'tasa_iva', type: 'float', required: false, desc: { es: 'IVA sobre intereses. Default: <code>16.0</code>', en: 'VAT on interest. Default: <code>16.0</code>' } },
-      { name: 'comision_a', type: 'float', required: false, desc: { es: 'Comisión de apertura (%)', en: 'Origination fee (%)' } },
-      { name: 'dias_gracia', type: 'integer', required: false, desc: { es: 'Días de gracia. Default: <code>0</code>', en: 'Grace days. Default: <code>0</code>' } },
+      { name: 'subproducto', type: 'integer', required: false, desc: { es: 'ID subproducto', en: 'Subproduct ID' } },
+      { name: 'enganche', type: 'float', required: false, desc: { es: 'Monto de enganche', en: 'Down payment amount' } },
     ],
     responseFields: [
-      { name: 'result', type: 'integer', desc: { es: 'ID del préstamo creado', en: 'Created loan ID' } },
+      { name: 'result.prestamo_id', type: 'integer', desc: { es: 'ID del préstamo creado', en: 'Created loan ID' } },
+      { name: 'result.name', type: 'string', desc: { es: 'Número del préstamo', en: 'Loan number' } },
     ],
-    model: 'vor.cre_prestamos',
-    odooMethod: 'create',
+    model: null,
+    odooMethod: null,
     codes: {
-      curl: jsonrpcCurl('vor.cre_prestamos', 'create', `[{
+      curl: restCurl('/api/v1/prestamos', `{
         "cliente": 123,
         "producto": 5,
         "monto": 50000.00,
-        "tasa": 36.0,
+        "tasa": 24.0,
         "periodicidad": "30",
         "periodos": 12,
         "fecha_desembolso": "2026-03-01",
         "fecha_ini": "2026-04-01",
-        "tipo_interes": "0",
-        "tipo_calculo": "0"
-      }]`),
-      python: jsonrpcPython('vor.cre_prestamos', 'create', `[{
-                "cliente": 123,
-                "producto": 5,
-                "monto": 50000.00,
-                "tasa": 36.0,
-                "periodicidad": "30",
-                "periodos": 12,
-                "fecha_desembolso": "2026-03-01",
-                "fecha_ini": "2026-04-01",
-                "tipo_interes": "0",
-                "tipo_calculo": "0"
-            }]`, `loan_id = resp.json()["result"]
-print(f"Loan ID: {loan_id}")`),
-      javascript: jsonrpcJS('vor.cre_prestamos', 'create', `[{
-          cliente: 123,
-          producto: 5,
-          monto: 50000.00,
-          tasa: 36.0,
-          periodicidad: '30',
-          periodos: 12,
-          fecha_desembolso: '2026-03-01',
-          fecha_ini: '2026-04-01',
-          tipo_interes: '0',
-          tipo_calculo: '0'
-        }]`, `console.log('Loan ID:', data.result);`),
-      php: jsonrpcPHP('vor.cre_prestamos', 'create', `[[
-            "cliente" => 123,
-            "producto" => 5,
-            "monto" => 50000.00,
-            "tasa" => 36.0,
-            "periodicidad" => "30",
-            "periodos" => 12,
-            "fecha_desembolso" => "2026-03-01",
-            "fecha_ini" => "2026-04-01",
-            "tipo_interes" => "0",
-            "tipo_calculo" => "0"
-        ]]`, `echo "Loan ID: " . $response["result"];`),
+        "tipo_interes": "0"
+      }`),
+      python: restPython('/api/v1/prestamos', `{
+        "cliente": 123,
+        "producto": 5,
+        "monto": 50000.00,
+        "tasa": 24.0,
+        "periodicidad": "30",
+        "periodos": 12,
+        "fecha_desembolso": "2026-03-01",
+        "fecha_ini": "2026-04-01",
+        "tipo_interes": "0"
+    }`, `data = resp.json()["result"]
+print(f"Loan ID: {data['prestamo_id']}")`),
+      javascript: restJS('/api/v1/prestamos', `{
+      cliente: 123,
+      producto: 5,
+      monto: 50000.00,
+      tasa: 24.0,
+      periodicidad: '30',
+      periodos: 12,
+      fecha_desembolso: '2026-03-01',
+      fecha_ini: '2026-04-01',
+      tipo_interes: '0'
+    }`, `console.log('Loan ID:', data.result.prestamo_id);`),
+      php: restPHP('/api/v1/prestamos', `[
+        "cliente" => 123,
+        "producto" => 5,
+        "monto" => 50000.00,
+        "tasa" => 24.0,
+        "periodicidad" => "30",
+        "periodos" => 12,
+        "fecha_desembolso" => "2026-03-01",
+        "fecha_ini" => "2026-04-01",
+        "tipo_interes" => "0"
+    ]`, `echo "Loan ID: " . $response["result"]["prestamo_id"];`),
     },
     responseExample: {
-      success: JSON.stringify({ jsonrpc: "2.0", id: 1, result: 456 }, null, 2),
+      success: JSON.stringify({
+        jsonrpc: "2.0", id: 1,
+        result: { prestamo_id: 456, name: "PREST-00456", state: "0" }
+      }, null, 2),
     },
   },
 
   {
-    id: 'prestamo-calcular',
+    id: 'prestamo-list',
     group: { es: 'Préstamos', en: 'Loans' },
-    name: { es: 'Calcular Amortización', en: 'Calculate Amortization' },
+    name: { es: 'Listar Préstamos', en: 'List Loans' },
     method: 'POST',
-    path: '{base_url}/jsonrpc',
+    path: '{base_url}/api/v1/prestamos/list',
     desc: {
-      es: 'Genera la tabla de amortización (flujos) del préstamo. El estado permanece en <code>0</code>. Los flujos se almacenan en <code>vor.cre_flujos</code>.',
-      en: 'Generates the amortization table (flows) for the loan. State remains <code>0</code>. Flows are stored in <code>vor.cre_flujos</code>.'
-    },
-    flow: ['create', 'calcular', 'ap02', 'ap03'],
-    flowActive: 1,
-    callout: {
-      type: 'warning',
-      text: {
-        es: 'Retorna <code>true</code>. Usar JSON-RPC (no XML-RPC). Leer flujos con <code>search_read</code> sobre <code>vor.cre_flujos</code>.',
-        en: 'Returns <code>true</code>. Use JSON-RPC (not XML-RPC). Read flows with <code>search_read</code> on <code>vor.cre_flujos</code>.'
-      }
+      es: 'Lista préstamos con filtros opcionales y paginación.',
+      en: 'Lists loans with optional filters and pagination.'
     },
     fields: [
-      { name: 'loan_ids', type: 'list[integer]', required: true, desc: { es: 'Lista con el ID del préstamo', en: 'List with loan ID' } },
+      { name: 'filters', type: 'object', required: false, desc: { es: 'Filtros: <code>state</code>, <code>cliente</code>, <code>periodicidad</code>, etc.', en: 'Filters: <code>state</code>, <code>cliente</code>, <code>periodicidad</code>, etc.' } },
+      { name: 'limit', type: 'integer', required: false, desc: { es: 'Máximo de resultados. Default: <code>10</code>', en: 'Max results. Default: <code>10</code>' } },
+      { name: 'offset', type: 'integer', required: false, desc: { es: 'Desplazamiento para paginación. Default: <code>0</code>', en: 'Offset for pagination. Default: <code>0</code>' } },
     ],
     responseFields: [
-      { name: 'result', type: 'boolean', desc: { es: 'Retorna <code>true</code> si el cálculo fue exitoso', en: 'Returns <code>true</code> if calculation was successful' } },
+      { name: 'result', type: 'list', desc: { es: 'Lista de préstamos con campos principales', en: 'List of loans with main fields' } },
     ],
-    model: 'vor.cre_prestamos',
-    odooMethod: 'calcular',
+    model: null,
+    odooMethod: null,
     codes: {
-      curl: jsonrpcCurl('vor.cre_prestamos', 'calcular', `[[456]]`),
-      python: `import requests
-
-# Step 1: Calculate
-payload = {
-    "jsonrpc": "2.0",
-    "method": "call",
-    "params": {
-        "service": "object",
-        "method": "execute_kw",
-        "args": ["{db}", {uid}, "{password}",
-                 "vor.cre_prestamos", "calcular", [[456]]]
-    },
-    "id": 1
-}
-requests.post("{base_url}/jsonrpc", json=payload)
-
-# Step 2: Read amortization table
-payload_read = {
-    "jsonrpc": "2.0",
-    "method": "call",
-    "params": {
-        "service": "object",
-        "method": "execute_kw",
-        "args": ["{db}", {uid}, "{password}",
-                 "vor.cre_flujos", "search_read",
-                 [[["credito", "=", 456]]],
-                 {"fields": ["numero", "fecha_vence",
-                             "capital", "interes", "iva_int",
-                             "pago_total", "saldo_exigible"],
-                  "order": "numero asc"}]
-    },
-    "id": 2
-}
-resp = requests.post("{base_url}/jsonrpc", json=payload_read)
-for row in resp.json()["result"]:
-    print(f"#{row['numero']} | {row['fecha_vence']} | "
-          f"\${row['pago_total']:,.2f}")`,
-      javascript: jsonrpcJS('vor.cre_prestamos', 'calcular', `[[456]]`, `console.log('Calculated:', data.result);
-
-// Read amortization table
-const flows = await fetch('{base_url}/jsonrpc', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    jsonrpc: '2.0', method: 'call',
-    params: {
-      service: 'object', method: 'execute_kw',
-      args: ['{db}', {uid}, '{password}',
-             'vor.cre_flujos', 'search_read',
-             [[['credito', '=', 456]]],
-             { fields: ['numero', 'fecha_vence', 'pago_total'],
-               order: 'numero asc' }]
-    }, id: 2
-  })
-});
-const table = (await flows.json()).result;
-table.forEach(r => console.log(\`#\${r.numero} \${r.fecha_vence} $\${r.pago_total}\`));`),
-      php: jsonrpcPHP('vor.cre_prestamos', 'calcular', `[[456]]`, `echo "Calculated: " . ($response["result"] ? "true" : "false");`),
+      curl: restCurl('/api/v1/prestamos/list', `{
+        "filters": {"state": "10"},
+        "limit": 10,
+        "offset": 0
+      }`),
+      python: restPython('/api/v1/prestamos/list', `{
+        "filters": {"state": "10"},
+        "limit": 10,
+        "offset": 0
+    }`, `loans = resp.json()["result"]
+for loan in loans:
+    print(f"{loan['name']} - State: {loan['state']}")`),
+      javascript: restJS('/api/v1/prestamos/list', `{
+      filters: { state: '10' },
+      limit: 10,
+      offset: 0
+    }`, `data.result.forEach(l => console.log(l.name, l.state));`),
+      php: restPHP('/api/v1/prestamos/list', `[
+        "filters" => ["state" => "10"],
+        "limit" => 10,
+        "offset" => 0
+    ]`, `foreach ($response["result"] as $loan) {
+    echo $loan["name"] . " - " . $loan["state"] . "\\n";
+}`),
     },
     responseExample: {
-      success: JSON.stringify({ jsonrpc: "2.0", id: 1, result: true }, null, 2),
+      success: JSON.stringify({
+        jsonrpc: "2.0", id: 1,
+        result: [
+          { id: 456, name: "PREST-00456", monto: 50000.0, state: "10", cliente: "Juan Pérez" },
+          { id: 457, name: "PREST-00457", monto: 75000.0, state: "10", cliente: "María López" }
+        ]
+      }, null, 2),
     },
   },
 
   {
-    id: 'prestamo-ap02',
+    id: 'prestamo-get',
     group: { es: 'Préstamos', en: 'Loans' },
-    name: { es: 'Procesar (ap02)', en: 'Process (ap02)' },
+    name: { es: 'Obtener Préstamo', en: 'Get Loan' },
     method: 'POST',
-    path: '{base_url}/jsonrpc',
+    path: '{base_url}/api/v1/prestamos/get',
     desc: {
-      es: 'Procesa el préstamo: genera número de contrato, aplica comisiones y cambia el estado a <code>1</code> (En Proceso). Requiere que la amortización esté calculada.',
-      en: 'Processes the loan: generates contract number, applies fees, and changes state to <code>1</code> (In Process). Requires calculated amortization.'
-    },
-    flow: ['create', 'calcular', 'ap02', 'ap03'],
-    flowActive: 2,
-    callout: {
-      type: 'info',
-      text: {
-        es: 'Retorna <code>null</code>. Usar JSON-RPC. Después de ap02, el préstamo tiene número de contrato y está listo para activación.',
-        en: 'Returns <code>null</code>. Use JSON-RPC. After ap02, the loan has a contract number and is ready for activation.'
-      }
+      es: 'Obtiene el detalle completo de un préstamo: saldos, estado, datos del contrato.',
+      en: 'Gets complete loan detail: balances, state, contract data.'
     },
     fields: [
-      { name: 'loan_ids', type: 'list[integer]', required: true, desc: { es: 'Lista con el ID del préstamo', en: 'List with loan ID' } },
+      { name: 'prestamo_id', type: 'integer', required: true, desc: { es: 'ID del préstamo', en: 'Loan ID' } },
+      { name: 'fields', type: 'list[string]', required: false, desc: { es: 'Campos específicos a retornar (optimización)', en: 'Specific fields to return (optimization)' } },
     ],
     responseFields: [
-      { name: 'result', type: 'null', desc: { es: 'Retorna null. Leer estado con <code>read</code>.', en: 'Returns null. Read state with <code>read</code>.' } },
+      { name: 'result.name', type: 'string', desc: { es: 'Número del préstamo', en: 'Loan number' } },
+      { name: 'result.monto', type: 'float', desc: { es: 'Monto original', en: 'Original amount' } },
+      { name: 'result.saldo_exigible', type: 'float', desc: { es: 'Saldo exigible actual', en: 'Current due balance' } },
+      { name: 'result.saldo_liquidar', type: 'float', desc: { es: 'Saldo para liquidar', en: 'Payoff balance' } },
+      { name: 'result.state', type: 'string', desc: { es: 'Estado: <code>0</code> Borrador, <code>1</code> En Proceso, <code>10</code> Vigente, <code>20</code> Vencido, <code>90</code> Liquidado, <code>99</code> Cancelado', en: 'State: <code>0</code> Draft, <code>1</code> Processing, <code>10</code> Active, <code>20</code> Past Due, <code>90</code> Paid Off, <code>99</code> Cancelled' } },
     ],
-    model: 'vor.cre_prestamos',
-    odooMethod: 'ap02',
+    model: null,
+    odooMethod: null,
     codes: {
-      curl: jsonrpcCurl('vor.cre_prestamos', 'ap02', `[[456]]`),
-      python: jsonrpcPython('vor.cre_prestamos', 'ap02', `[[456]]`, `# State is now "1" (In Process)
-print("Loan processed")`),
-      javascript: jsonrpcJS('vor.cre_prestamos', 'ap02', `[[456]]`, `console.log('Loan processed');`),
-      php: jsonrpcPHP('vor.cre_prestamos', 'ap02', `[[456]]`, `echo "Loan processed";`),
-    },
-    responseExample: {
-      success: JSON.stringify({ jsonrpc: "2.0", id: 1, result: null }, null, 2),
-    },
-  },
-
-  {
-    id: 'prestamo-ap03',
-    group: { es: 'Préstamos', en: 'Loans' },
-    name: { es: 'Activar / Desembolsar (ap03)', en: 'Activate / Disburse (ap03)' },
-    method: 'POST',
-    path: '{base_url}/jsonrpc',
-    desc: {
-      es: 'Activa el préstamo y registra el desembolso. Cambia estado a <code>10</code> (Vigente). Genera asientos contables.',
-      en: 'Activates the loan and registers disbursement. Changes state to <code>10</code> (Active). Creates accounting entries.'
-    },
-    flow: ['create', 'calcular', 'ap02', 'ap03'],
-    flowActive: 3,
-    callout: {
-      type: 'danger',
-      text: {
-        es: '<strong>IRREVERSIBLE.</strong> Una vez activado, el préstamo no puede cancelarse. Genera asientos contables y compromete fondos.',
-        en: '<strong>IRREVERSIBLE.</strong> Once activated, the loan cannot be cancelled. Creates accounting entries and commits funds.'
-      }
-    },
-    fields: [
-      { name: 'loan_ids', type: 'list[integer]', required: true, desc: { es: 'Lista con el ID del préstamo', en: 'List with loan ID' } },
-    ],
-    responseFields: [
-      { name: 'result', type: 'null', desc: { es: 'Retorna null. El préstamo ahora está vigente.', en: 'Returns null. Loan is now active.' } },
-    ],
-    model: 'vor.cre_prestamos',
-    odooMethod: 'ap03',
-    codes: {
-      curl: jsonrpcCurl('vor.cre_prestamos', 'ap03', `[[456]]`),
-      python: jsonrpcPython('vor.cre_prestamos', 'ap03', `[[456]]`, `# State is now "10" (Active)
-print("Loan activated and disbursed")`),
-      javascript: jsonrpcJS('vor.cre_prestamos', 'ap03', `[[456]]`, `console.log('Loan activated');`),
-      php: jsonrpcPHP('vor.cre_prestamos', 'ap03', `[[456]]`, `echo "Loan activated and disbursed";`),
-    },
-    responseExample: {
-      success: JSON.stringify({ jsonrpc: "2.0", id: 1, result: null }, null, 2),
-    },
-  },
-
-  {
-    id: 'prestamo-read',
-    group: { es: 'Préstamos', en: 'Loans' },
-    name: { es: 'Leer Saldos', en: 'Read Balances' },
-    method: 'POST',
-    path: '{base_url}/jsonrpc',
-    desc: {
-      es: 'Lee los saldos y estado actual de un préstamo.',
-      en: 'Reads current balances and state of a loan.'
-    },
-    fields: [
-      { name: 'ids', type: 'list[integer]', required: true, desc: { es: 'Lista con el ID del préstamo', en: 'List with loan ID' } },
-      { name: 'fields', type: 'list[string]', required: false, desc: { es: 'Campos a leer', en: 'Fields to read' } },
-    ],
-    responseFields: [
-      { name: 'monto', type: 'float', desc: { es: 'Monto original', en: 'Original amount' } },
-      { name: 'saldo_exigible', type: 'float', desc: { es: 'Saldo exigible actual', en: 'Current due balance' } },
-      { name: 'saldo_liquidar', type: 'float', desc: { es: 'Saldo para liquidar', en: 'Payoff balance' } },
-      { name: 'state', type: 'string', desc: { es: 'Estado: <code>0</code> Borrador, <code>1</code> En Proceso, <code>10</code> Vigente, <code>20</code> Vencido, <code>90</code> Liquidado, <code>99</code> Cancelado', en: 'State: <code>0</code> Draft, <code>1</code> Processing, <code>10</code> Active, <code>20</code> Past Due, <code>90</code> Paid Off, <code>99</code> Cancelled' } },
-    ],
-    model: 'vor.cre_prestamos',
-    odooMethod: 'read',
-    codes: {
-      curl: jsonrpcCurl('vor.cre_prestamos', 'read', `[[456]],
-      {"fields": ["name", "monto", "saldo_exigible", "saldo_liquidar", "state"]}`),
-      python: jsonrpcPython('vor.cre_prestamos', 'read', `[[456]],
-            {"fields": ["name", "monto", "saldo_exigible",
-                        "saldo_liquidar", "state"]}`, `loan = resp.json()["result"][0]
+      curl: restCurl('/api/v1/prestamos/get', `{
+        "prestamo_id": 456
+      }`),
+      python: restPython('/api/v1/prestamos/get', `{
+        "prestamo_id": 456
+    }`, `loan = resp.json()["result"]
 print(f"Loan: {loan['name']}")
 print(f"Balance: \${loan['saldo_exigible']:,.2f}")
 print(f"State: {loan['state']}")`),
-      javascript: jsonrpcJS('vor.cre_prestamos', 'read', `[[456]],
-        { fields: ['name', 'monto', 'saldo_exigible', 'saldo_liquidar', 'state'] }`, `const loan = data.result[0];
-console.log(\`\${loan.name}: $\${loan.saldo_exigible}\`);`),
-      php: jsonrpcPHP('vor.cre_prestamos', 'read', `[[456]],
-        ["fields" => ["name", "monto", "saldo_exigible", "saldo_liquidar", "state"]]`, `$loan = $response["result"][0];
+      javascript: restJS('/api/v1/prestamos/get', `{
+      prestamo_id: 456
+    }`, `const loan = data.result;
+console.log(loan.name, loan.saldo_exigible);`),
+      php: restPHP('/api/v1/prestamos/get', `[
+        "prestamo_id" => 456
+    ]`, `$loan = $response["result"];
 echo $loan["name"] . ": $" . $loan["saldo_exigible"];`),
     },
     responseExample: {
       success: JSON.stringify({
         jsonrpc: "2.0", id: 1,
-        result: [{
+        result: {
           id: 456, name: "PREST-00456",
-          monto: 50000.0,
+          monto: 50000.0, tasa: 24.0,
+          periodicidad: "30", periodos: 12,
           saldo_exigible: 45231.50,
           saldo_liquidar: 48500.00,
-          state: "10"
-        }]
+          state: "10",
+          fecha_desembolso: "2026-03-01",
+          fecha_ini: "2026-04-01"
+        }
+      }, null, 2),
+    },
+  },
+
+  {
+    id: 'prestamo-movimientos',
+    group: { es: 'Préstamos', en: 'Loans' },
+    name: { es: 'Movimientos', en: 'Movements' },
+    method: 'POST',
+    path: '{base_url}/api/v1/prestamos/movimientos',
+    desc: {
+      es: 'Consulta los movimientos de un préstamo: pagos, eventos y operaciones. Soporta filtros por tipo y rango de fechas.',
+      en: 'Queries loan movements: payments, events and operations. Supports type and date range filters.'
+    },
+    fields: [
+      { name: 'prestamo_id', type: 'integer', required: true, desc: { es: 'ID del préstamo', en: 'Loan ID' } },
+      { name: 'tipo', type: 'string', required: false, desc: { es: '<code>"pagos"</code>, <code>"eventos"</code> o vacío para todos', en: '<code>"pagos"</code>, <code>"eventos"</code> or empty for all' } },
+      { name: 'fecha_desde', type: 'date', required: false, desc: { es: 'Filtro desde fecha <code>YYYY-MM-DD</code>', en: 'Filter from date <code>YYYY-MM-DD</code>' } },
+      { name: 'fecha_hasta', type: 'date', required: false, desc: { es: 'Filtro hasta fecha <code>YYYY-MM-DD</code>', en: 'Filter to date <code>YYYY-MM-DD</code>' } },
+      { name: 'limit', type: 'integer', required: false, desc: { es: 'Máximo de resultados', en: 'Max results' } },
+    ],
+    responseFields: [
+      { name: 'result', type: 'list', desc: { es: 'Lista de movimientos con fecha, tipo, monto', en: 'List of movements with date, type, amount' } },
+    ],
+    model: null,
+    odooMethod: null,
+    codes: {
+      curl: restCurl('/api/v1/prestamos/movimientos', `{
+        "prestamo_id": 456,
+        "tipo": "pagos",
+        "limit": 50
+      }`),
+      python: restPython('/api/v1/prestamos/movimientos', `{
+        "prestamo_id": 456,
+        "tipo": "pagos",
+        "limit": 50
+    }`, `movs = resp.json()["result"]
+for m in movs:
+    print(f"{m['fecha']} | {m['tipo']} | \${m['monto']:,.2f}")`),
+      javascript: restJS('/api/v1/prestamos/movimientos', `{
+      prestamo_id: 456,
+      tipo: 'pagos',
+      limit: 50
+    }`, `data.result.forEach(m =>
+  console.log(m.fecha, m.tipo, m.monto)
+);`),
+      php: restPHP('/api/v1/prestamos/movimientos', `[
+        "prestamo_id" => 456,
+        "tipo" => "pagos",
+        "limit" => 50
+    ]`, `foreach ($response["result"] as $m) {
+    echo $m["fecha"] . " | " . $m["tipo"] . " | $" . $m["monto"] . "\\n";
+}`),
+    },
+    responseExample: {
+      success: JSON.stringify({
+        jsonrpc: "2.0", id: 1,
+        result: [
+          { fecha: "2026-04-01", tipo: "pago", monto: 4800.50, referencia: "PAG-001" },
+          { fecha: "2026-05-01", tipo: "pago", monto: 4800.50, referencia: "PAG-002" }
+        ]
+      }, null, 2),
+    },
+  },
+
+  {
+    id: 'prestamo-amortizaciones',
+    group: { es: 'Préstamos', en: 'Loans' },
+    name: { es: 'Amortizaciones', en: 'Amortization' },
+    method: 'POST',
+    path: '{base_url}/api/v1/prestamos/amortizaciones',
+    desc: {
+      es: 'Obtiene la tabla de amortización del préstamo. Soporta filtros por estado de parcialidades y tipo de financiamiento.',
+      en: 'Gets the loan amortization table. Supports filters by installment state and financing type.'
+    },
+    fields: [
+      { name: 'prestamo_id', type: 'integer', required: true, desc: { es: 'ID del préstamo', en: 'Loan ID' } },
+      { name: 'state', type: 'string', required: false, desc: { es: 'Filtrar por estado: <code>"2"</code> Exigibles, <code>"3"</code> Vencidas', en: 'Filter by state: <code>"2"</code> Due, <code>"3"</code> Past due' } },
+      { name: 'tipo_financiamiento', type: 'string', required: false, desc: { es: 'Filtrar por tipo: <code>"0"</code> Principal', en: 'Filter by type: <code>"0"</code> Principal' } },
+      { name: 'fields', type: 'list[string]', required: false, desc: { es: 'Campos específicos a retornar', en: 'Specific fields to return' } },
+      { name: 'limit', type: 'integer', required: false, desc: { es: 'Máximo de resultados', en: 'Max results' } },
+    ],
+    responseFields: [
+      { name: 'result[].numero', type: 'integer', desc: { es: 'Número de parcialidad', en: 'Installment number' } },
+      { name: 'result[].fecha_vence', type: 'date', desc: { es: 'Fecha de vencimiento', en: 'Due date' } },
+      { name: 'result[].capital', type: 'float', desc: { es: 'Capital de la parcialidad', en: 'Installment capital' } },
+      { name: 'result[].interes', type: 'float', desc: { es: 'Interés de la parcialidad', en: 'Installment interest' } },
+      { name: 'result[].iva_int', type: 'float', desc: { es: 'IVA sobre intereses', en: 'VAT on interest' } },
+      { name: 'result[].pago_total', type: 'float', desc: { es: 'Pago total de la parcialidad', en: 'Total installment payment' } },
+      { name: 'result[].saldo_exigible', type: 'float', desc: { es: 'Saldo exigible después del pago', en: 'Due balance after payment' } },
+    ],
+    model: null,
+    odooMethod: null,
+    codes: {
+      curl: restCurl('/api/v1/prestamos/amortizaciones', `{
+        "prestamo_id": 456,
+        "limit": 25
+      }`),
+      python: restPython('/api/v1/prestamos/amortizaciones', `{
+        "prestamo_id": 456,
+        "limit": 25
+    }`, `rows = resp.json()["result"]
+for row in rows:
+    print(f"#{row['numero']} | {row['fecha_vence']} | "
+          f"\${row['pago_total']:,.2f}")`),
+      javascript: restJS('/api/v1/prestamos/amortizaciones', `{
+      prestamo_id: 456,
+      limit: 25
+    }`, `data.result.forEach(r =>
+  console.log(\`#\${r.numero} \${r.fecha_vence} $\${r.pago_total}\`)
+);`),
+      php: restPHP('/api/v1/prestamos/amortizaciones', `[
+        "prestamo_id" => 456,
+        "limit" => 25
+    ]`, `foreach ($response["result"] as $row) {
+    echo "#" . $row["numero"] . " | " . $row["fecha_vence"] . " | $" . $row["pago_total"] . "\\n";
+}`),
+    },
+    responseExample: {
+      success: JSON.stringify({
+        jsonrpc: "2.0", id: 1,
+        result: [
+          { numero: 1, fecha_vence: "2026-04-01", capital: 3800.50, interes: 1000.00, iva_int: 160.00, pago_total: 4960.50, saldo_exigible: 46199.50 },
+          { numero: 2, fecha_vence: "2026-05-01", capital: 3876.51, interes: 923.99, iva_int: 147.84, pago_total: 4948.34, saldo_exigible: 42322.99 }
+        ]
       }, null, 2),
     },
   },
@@ -1349,49 +1479,86 @@ async function sendRequest(ep) {
       return;
     }
 
-    // Build args based on endpoint
-    let args;
-    const m = ep.model;
-    const method = ep.odooMethod;
-
-    if (method === 'search_read') {
-      args = [db, uid, pwd, m, method, [[]], { fields: ['name'], limit: 5 }];
-    } else if (method === 'search') {
-      args = [db, uid, pwd, m, method, [[['bp_es_cliente', '=', true]]], { limit: 5 }];
-    } else if (method === 'read') {
-      args = [db, uid, pwd, m, method, [[1]], { fields: ['name'] }];
-    } else if (method === 'calcular_riesgo_score' || method === 'calcular' || method === 'ap02' || method === 'ap03') {
-      args = [db, uid, pwd, m, method, [[1]]];
-    } else if (method === 'create') {
-      // Don't actually create in playground
+    // Block write operations in playground
+    const writeOps = ['prestamo-crear', 'partner-upsert'];
+    if (writeOps.includes(ep.id)) {
       statusEl.className = 'result-status error';
       statusEl.textContent = 'N/A';
       bodyEl.textContent = lang === 'es'
-        ? 'El método "create" no se ejecuta desde el playground para evitar crear datos de prueba.\nUsa Postman o un script.'
-        : '"create" method is not executed from playground to avoid creating test data.\nUse Postman or a script.';
+        ? 'Las operaciones de escritura no se ejecutan desde el playground para evitar crear datos de prueba.\nUsa Postman o un script.'
+        : 'Write operations are not executed from playground to avoid creating test data.\nUse Postman or a script.';
       return;
-    } else if (method === 'create_or_update_partner') {
-      statusEl.className = 'result-status error';
-      statusEl.textContent = 'N/A';
-      bodyEl.textContent = lang === 'es'
-        ? 'El método upsert no se ejecuta desde el playground.\nUsa Postman o un script.'
-        : 'Upsert method is not executed from playground.\nUse Postman or a script.';
-      return;
-    } else {
-      args = [db, uid, pwd, m, method, []];
     }
 
-    const payload = {
-      jsonrpc: '2.0', method: 'call',
-      params: { service: 'object', method: 'execute_kw', args },
-      id: 1
-    };
+    let resp;
 
-    const resp = await fetch(`${url}/jsonrpc`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+    // REST API endpoints (no model/odooMethod)
+    if (!ep.model && !ep.odooMethod) {
+      const restPath = ep.path.replace('{base_url}', '');
+      const restParams = {};
+      if (ep.id === 'prestamo-list') {
+        restParams.filters = { state: '10' };
+        restParams.limit = 5;
+      } else if (ep.id === 'prestamo-get') {
+        restParams.prestamo_id = 1;
+      } else if (ep.id === 'prestamo-movimientos') {
+        restParams.prestamo_id = 1;
+        restParams.limit = 5;
+      } else if (ep.id === 'prestamo-amortizaciones') {
+        restParams.prestamo_id = 1;
+        restParams.limit = 5;
+      }
+
+      resp = await fetch(`${url}${restPath}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cookie': `session_id=${pwd}`
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          jsonrpc: '2.0', method: 'call',
+          params: restParams,
+          id: 1
+        }),
+      });
+    } else {
+      // JSON-RPC endpoints (model + odooMethod)
+      let args;
+      const m = ep.model;
+      const method = ep.odooMethod;
+
+      if (method === 'search_read') {
+        args = [db, uid, pwd, m, method, [[]], { fields: ['name'], limit: 5 }];
+      } else if (method === 'search') {
+        args = [db, uid, pwd, m, method, [[['bp_es_cliente', '=', true]]], { limit: 5 }];
+      } else if (method === 'read') {
+        args = [db, uid, pwd, m, method, [[1]], { fields: ['name'] }];
+      } else if (method === 'calcular_riesgo_score') {
+        args = [db, uid, pwd, m, method, [[1]]];
+      } else if (method === 'create_or_update_partner') {
+        statusEl.className = 'result-status error';
+        statusEl.textContent = 'N/A';
+        bodyEl.textContent = lang === 'es'
+          ? 'El método upsert no se ejecuta desde el playground.\nUsa Postman o un script.'
+          : 'Upsert method is not executed from playground.\nUse Postman or a script.';
+        return;
+      } else {
+        args = [db, uid, pwd, m, method, []];
+      }
+
+      const payload = {
+        jsonrpc: '2.0', method: 'call',
+        params: { service: 'object', method: 'execute_kw', args },
+        id: 1
+      };
+
+      resp = await fetch(`${url}/jsonrpc`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    }
 
     const elapsed = Date.now() - start;
     const data = await resp.json();
@@ -1458,10 +1625,10 @@ function renderOverview(left, right) {
       <span class="flow-step">Login</span><span class="flow-arrow">\u2192</span>
       <span class="flow-step">Partner</span><span class="flow-arrow">\u2192</span>
       <span class="flow-step">PLD</span><span class="flow-arrow">\u2192</span>
-      <span class="flow-step">create</span><span class="flow-arrow">\u2192</span>
-      <span class="flow-step">calcular</span><span class="flow-arrow">\u2192</span>
-      <span class="flow-step">ap02</span><span class="flow-arrow">\u2192</span>
-      <span class="flow-step active">ap03</span>
+      <span class="flow-step">Crear</span><span class="flow-arrow">\u2192</span>
+      <span class="flow-step">Listar</span><span class="flow-arrow">\u2192</span>
+      <span class="flow-step">Consultar</span><span class="flow-arrow">\u2192</span>
+      <span class="flow-step active">Amortizaciones</span>
     </div>
     <div class="section-title">API Reference</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px">
@@ -1553,12 +1720,12 @@ function renderRefPostman(left, right) {
     ${makeTable(
       ['#', isEs ? 'Carpeta' : 'Folder', 'Requests', isEs ? 'Descripción' : 'Description'],
       [
-        ['0', isEs ? 'Autenticación' : 'Authentication', '1', 'Login XML-RPC'],
+        ['0', isEs ? 'Autenticación' : 'Authentication', '1', 'Login /web/session/authenticate'],
         ['1', isEs ? 'Catálogos Dinámicos' : 'Dynamic Catalogs', '12', isEs ? 'Estados, Bancos, Productos, etc.' : 'States, Banks, Products, etc.'],
         ['2', 'Partner - Dedup', '3', isEs ? 'Buscar por CURP, RFC, Nombre' : 'Search by CURP, RFC, Name'],
         ['3', 'Partner - CRUD + Upsert', '6', isEs ? 'Crear, Actualizar, Leer, Upsert' : 'Create, Update, Read, Upsert'],
         ['4', 'PLD/AML', '4', isEs ? 'Validar, Scoring, Leer resultado' : 'Validate, Scoring, Read result'],
-        ['5', isEs ? 'Préstamos' : 'Loans', '7', 'Create, Calcular, AP02, AP03, Read'],
+        ['5', isEs ? 'Préstamos' : 'Loans', '5', isEs ? 'Crear, Listar, Obtener, Movimientos, Amortizaciones (REST)' : 'Create, List, Get, Movements, Amortization (REST)'],
         ['6', isEs ? 'Movimientos' : 'Movements', '1', isEs ? 'Eventos del préstamo' : 'Loan events'],
       ]
     )}
@@ -1745,18 +1912,18 @@ function renderRefErrors(left, right) {
       ['<code>Object does not exist</code>', isEs ? 'Modelo no existe' : 'Model not found', isEs ? 'Verificar módulo instalado' : 'Check module installed'],
       ['<code>MissingError</code>', isEs ? 'ID no encontrado' : 'ID not found', isEs ? 'Verificar que el registro existe' : 'Check record exists'],
       ['<code>ValidationError</code>', isEs ? 'Constraint de modelo' : 'Model constraint', isEs ? 'Revisar campos requeridos' : 'Check required fields'],
-      ['<code>cannot marshal None</code>', isEs ? 'Método retorna None vía XML-RPC' : 'Method returns None via XML-RPC', isEs ? '<strong>Usar JSON-RPC</strong>' : '<strong>Use JSON-RPC</strong>'],
+      ['<code>cannot marshal None</code>', isEs ? 'Método retorna None (si se usa XML-RPC legacy)' : 'Method returns None (if using legacy XML-RPC)', isEs ? '<strong>Usar JSON-RPC</strong>' : '<strong>Use JSON-RPC</strong>'],
       ['<code>Invalid field</code>', isEs ? 'Campo no existe' : 'Field not found', isEs ? 'Verificar nombre del campo' : 'Check field name'],
     ])}
 
     <div class="section-title">${isEs ? 'Protocolos' : 'Protocols'}</div>
     ${makeTable([isEs ? 'Protocolo' : 'Protocol', isEs ? 'Soporta None' : 'Supports None', 'Endpoint', isEs ? 'Uso' : 'Usage'], [
-      ['XML-RPC', 'No', '<code>/xmlrpc/2/object</code>', isEs ? 'Solo login' : 'Login only'],
+      ['JSON-RPC', isEs ? 'Sí' : 'Yes', '<code>/web/session/authenticate</code>', isEs ? 'Login (sesión)' : 'Login (session)'],
       ['JSON-RPC', isEs ? 'Sí' : 'Yes', '<code>/jsonrpc</code>', isEs ? 'Todas las demás llamadas' : 'All other calls'],
     ])}
     <div class="callout callout-warning">${isEs
-      ? '<strong>Recomendación:</strong> Usar siempre JSON-RPC (<code>/jsonrpc</code>) para todas las operaciones excepto el login inicial.'
-      : '<strong>Recommendation:</strong> Always use JSON-RPC (<code>/jsonrpc</code>) for all operations except initial login.'}</div>`;
+      ? '<strong>Recomendación:</strong> Usar <code>/web/session/authenticate</code> para login y <code>/jsonrpc</code> para todas las demás operaciones.'
+      : '<strong>Recommendation:</strong> Use <code>/web/session/authenticate</code> for login and <code>/jsonrpc</code> for all other operations.'}</div>`;
 
   right.innerHTML = `
     <div class="code-section">
