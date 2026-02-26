@@ -1,0 +1,828 @@
+{
+  "info": {
+    "name": "Acendes API Collection",
+    "description": "Colección de APIs nativas de Odoo v16 (JSON-RPC) para integración Sistema Externo ↔ Acendes Cartera.\n\nFlujo: Login → Catálogos → create_or_update_partner (upsert) → PLD Scoring → Crear Préstamo → Activar\n\nDocumentación: DOCUMENTACION-API.md",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "acendes-docs"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "https://demo.example.com",
+      "type": "string"
+    },
+    {
+      "key": "db",
+      "value": "BASE_DE_DATOS",
+      "type": "string"
+    },
+    {
+      "key": "username",
+      "value": "usuario@api.com",
+      "type": "string"
+    },
+    {
+      "key": "password",
+      "value": "API_KEY_O_PASSWORD",
+      "type": "string"
+    },
+    {
+      "key": "uid",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "partner_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "prestamo_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "score_id",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "0. Autenticación",
+      "item": [
+        {
+          "name": "Login (obtener UID)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = xml2Json(responseBody);",
+                  "var uid = jsonData.methodResponse.params.param.value.int;",
+                  "pm.collectionVariables.set('uid', uid);",
+                  "pm.test('Login exitoso - UID obtenido', function() {",
+                  "    pm.expect(parseInt(uid)).to.be.above(0);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\"?>\n<methodCall>\n  <methodName>authenticate</methodName>\n  <params>\n    <param><value><string>{{db}}</string></value></param>\n    <param><value><string>{{username}}</string></value></param>\n    <param><value><string>{{password}}</string></value></param>\n    <param><value><struct></struct></value></param>\n  </params>\n</methodCall>"
+            },
+            "url": "{{base_url}}/xmlrpc/2/common",
+            "description": "Autenticación XML-RPC. Retorna el UID que se usa en todas las llamadas posteriores."
+          }
+        }
+      ]
+    },
+    {
+      "name": "1. Catálogos Dinámicos (requieren consulta API)",
+      "description": "Catálogos almacenados en base de datos que requieren consulta API.\n\n**Los valores estáticos (selection fields) NO requieren consulta API** - están documentados en DOCUMENTACION-API.md sección 3.1. Incluyen:\nbp_tipo_persona, bp_sexo, bp_tipo_identificacion, bp_tipo_empleo, bp_tipo_sector, bp_tipo_cliente, vor_pld_monedas_reales2, vor_pld_instrumentos_reales2, vor_pld_metodos_reales.\n\nEstos catálogos dinámicos se recomiendan cachear al arrancar Sistema Externo y refrescar periódicamente.",
+      "item": [
+        {
+          "name": "1.1 Listar Estados SEPOMEX",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"vor.sepo_estados\",\n      \"search_read\",\n      [[]],\n      {\"fields\": [\"id\", \"name\", \"clave_estado\"], \"limit\": 50}\n    ]\n  },\n  \"id\": 1\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "32 estados de México. Usar 'id' para campos rel_estado, bp_estado_nacimiento, laboral_rel_estado."
+          }
+        },
+        {
+          "name": "1.2 Listar Actividades Económicas",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"vor.actividad_economica\",\n      \"search_read\",\n      [[]],\n      {\"fields\": [\"id\", \"name\", \"riesgo_pld\", \"vulnerable_pld\"], \"limit\": 500}\n    ]\n  },\n  \"id\": 2\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Actividades económicas CNBV. Requerido para PLD scoring. Usar 'id' para campo vor_actividad_economica."
+          }
+        },
+        {
+          "name": "1.3 Listar Bancos",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"vor.cat_institucion\",\n      \"search_read\",\n      [[]],\n      {\"fields\": [\"id\", \"name\", \"id_banxico\"], \"limit\": 200}\n    ]\n  },\n  \"id\": 3\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Instituciones bancarias. Usar 'id' para campo bp_banco del partner."
+          }
+        },
+        {
+          "name": "1.4 Listar Productos de Préstamo",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"vor.cre_productos\",\n      \"search_read\",\n      [[]],\n      {\"fields\": [\"id\", \"name\"], \"limit\": 20}\n    ]\n  },\n  \"id\": 4\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Productos de préstamo disponibles. Usar 'id' para campo 'producto' al crear préstamo."
+          }
+        },
+        {
+          "name": "1.5 Listar Subproductos por Producto",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"vor.cre_subproductos\",\n      \"search_read\",\n      [[[\"producto\", \"=\", 5]]],\n      {\"fields\": [\"id\", \"name\", \"producto\"], \"limit\": 20}\n    ]\n  },\n  \"id\": 5\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Subproductos de un producto específico. Cambiar el '5' por el ID del producto deseado."
+          }
+        },
+        {
+          "name": "1.6 Listar Escolaridad",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"vor.cat_escolaridad\",\n      \"search_read\",\n      [[]],\n      {\"fields\": [\"id\", \"name\"], \"limit\": 20}\n    ]\n  },\n  \"id\": 6\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Niveles de escolaridad. Usar 'id' para campo bp_se_escolaridad."
+          }
+        },
+        {
+          "name": "1.7 Listar Estado Civil",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"vor.cat_edocivil\",\n      \"search_read\",\n      [[]],\n      {\"fields\": [\"id\", \"name\"], \"limit\": 20}\n    ]\n  },\n  \"id\": 7\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Estados civiles. Usar 'id' para campo bp_se_edocivil."
+          }
+        },
+        {
+          "name": "1.8 Buscar Colonias por CP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"vor.sepo_colonias\",\n      \"search_read\",\n      [[[\"codigo_postal\", \"=\", \"44100\"]]],\n      {\"fields\": [\"id\", \"name\", \"codigo_postal\", \"rel_estado\"], \"limit\": 50}\n    ]\n  },\n  \"id\": 8\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Buscar colonias por código postal. Cambiar '44100' por el CP deseado."
+          }
+        },
+        {
+          "name": "1.9 Buscar CP (Código Postal)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"vor.sepo_postales\",\n      \"search_read\",\n      [[[\"name\", \"=\", \"44100\"]]],\n      {\"fields\": [\"id\", \"name\", \"clave_estado\", \"clave_municipio\", \"rel_estado\", \"rel_municipio\"], \"limit\": 5}\n    ]\n  },\n  \"id\": 9\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Buscar datos de un CP. Retorna estado y municipio automáticamente. Cambiar '44100' por el CP deseado."
+          }
+        },
+        {
+          "name": "1.10 Listar Municipios por Estado",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"vor.sepo_municipios\",\n      \"search_read\",\n      [[[\"rel_estado\", \"=\", 47]]],\n      {\"fields\": [\"id\", \"name\", \"clave_municipio\"], \"limit\": 200}\n    ]\n  },\n  \"id\": 10\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Municipios de un estado. Cambiar '47' (Jalisco) por el ID del estado deseado."
+          }
+        },
+        {
+          "name": "1.11 Listar Tipos de Vivienda",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"vor.cat_tipovivienda\",\n      \"search_read\",\n      [[]],\n      {\"fields\": [\"id\", \"name\"], \"limit\": 20}\n    ]\n  },\n  \"id\": 11\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Tipos de vivienda para datos socioeconómicos del partner."
+          }
+        },
+        {
+          "name": "1.12 Listar Países",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"res.country\",\n      \"search_read\",\n      [[]],\n      {\"fields\": [\"id\", \"name\", \"code\"], \"limit\": 300}\n    ]\n  },\n  \"id\": 12\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Países. México = 156. Usar 'id' para country_id, bp_pais_nacimiento, bp_nacionalidad, bp_pais_residencia."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Partner - Deduplicación",
+      "description": "SIEMPRE buscar si el partner existe antes de crearlo.",
+      "item": [
+        {
+          "name": "2.1 Buscar por CURP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"res.partner\",\n      \"search_read\",\n      [[[\"bp_curp\", \"=\", \"GOMA950315HJCNRN08\"]]],\n      {\"fields\": [\"id\", \"name\", \"bp_curp\", \"vat\", \"bp_tipo_persona\", \"vor_pld_nivel_riesgo\", \"active\"], \"limit\": 5}\n    ]\n  },\n  \"id\": 20\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Búsqueda primaria. Si retorna [] = no existe → crear. Si retorna datos → usar el ID existente."
+          }
+        },
+        {
+          "name": "2.2 Buscar por RFC",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"res.partner\",\n      \"search_read\",\n      [[[\"vat\", \"=\", \"GOMA950315AB1\"]]],\n      {\"fields\": [\"id\", \"name\", \"bp_curp\", \"vat\"], \"limit\": 5}\n    ]\n  },\n  \"id\": 21\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Búsqueda de respaldo por RFC cuando no se tiene CURP (ej. Persona Moral)."
+          }
+        },
+        {
+          "name": "2.3 Buscar por Nombre + Fecha Nacimiento",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"res.partner\",\n      \"search_read\",\n      [[\n        [\"bp_nom_primero\", \"ilike\", \"Andres\"],\n        [\"bp_ape_paterno\", \"ilike\", \"Gonzalez\"],\n        [\"bp_fecha_nacimiento\", \"=\", \"1995-03-15\"]\n      ]],\n      {\"fields\": [\"id\", \"name\", \"bp_curp\", \"vat\", \"bp_fecha_nacimiento\"], \"limit\": 10}\n    ]\n  },\n  \"id\": 22\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Búsqueda fuzzy cuando no se tiene CURP ni RFC. Combina nombre + apellido + fecha nacimiento."
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Partner - CRUD + Upsert",
+      "description": "Creación, actualización y lectura de partners (clientes).",
+      "item": [
+        {
+          "name": "3.1 Crear Partner - Persona Física",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.result) {",
+                  "    pm.collectionVariables.set('partner_id', jsonData.result);",
+                  "    pm.test('Partner PF creado', function() {",
+                  "        pm.expect(jsonData.result).to.be.above(0);",
+                  "    });",
+                  "} else if (jsonData.error) {",
+                  "    pm.test('Error al crear partner: ' + jsonData.error.data.message, function() {",
+                  "        pm.expect.fail(jsonData.error.data.message);",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"res.partner\",\n      \"create\",\n      [{\n        \"name\": \"Gonzalez Martinez Andres\",\n        \"company_type\": \"person\",\n        \"type\": \"contact\",\n        \"bp_tipo_persona\": \"f\",\n        \"bp_es_cliente\": true,\n        \"bp_curp\": \"GOMA950315HJCNRN08\",\n        \"vat\": \"GOMA950315AB1\",\n        \"bp_nom_primero\": \"Andres\",\n        \"bp_ape_paterno\": \"Gonzalez\",\n        \"bp_ape_materno\": \"Martinez\",\n        \"bp_fecha_nacimiento\": \"1995-03-15\",\n        \"bp_sexo\": \"m\",\n        \"bp_tipo_identificacion\": \"ine\",\n        \"bp_tiene_rfc\": true,\n        \"mobile\": \"3331234567\",\n        \"phone\": \"3339876543\",\n        \"email\": \"andres.test@email.com\",\n        \"street\": \"Calle Prueba API 456\",\n        \"zip\": \"44100\",\n        \"city\": \"Guadalajara\",\n        \"country_id\": 156,\n        \"rel_estado\": 47,\n        \"bp_pais_nacimiento\": 156,\n        \"bp_nacionalidad\": 156,\n        \"bp_pais_residencia\": 156,\n        \"bp_estado_nacimiento\": 47,\n        \"bp_tipo_empleo\": \"emp_priv\",\n        \"bp_tipo_sector\": \"priv\",\n        \"laboral_dir_pais\": 156,\n        \"laboral_rel_estado\": 47,\n        \"laboral_empresa\": \"Empresa Test SA\",\n        \"laboral_salario_mensual\": 35000.00,\n        \"bp_tipo_cliente\": \"nuevo\",\n        \"vor_pld_monedas_reales2\": \"mn\",\n        \"vor_pld_instrumentos_reales2\": \"r3\",\n        \"vor_pld_metodos_reales\": \"trans\",\n        \"vor_pld_es_ppe\": false\n      }]\n    ]\n  },\n  \"id\": 30\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Crea partner PF con todos los campos PLD requeridos. Retorna partner_id.\n\nCampos marcados con ★ son requeridos para PLD scoring."
+          }
+        },
+        {
+          "name": "3.2 Crear Partner - Persona Moral",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.result) {",
+                  "    pm.collectionVariables.set('partner_id', jsonData.result);",
+                  "    pm.test('Partner PM creado', function() {",
+                  "        pm.expect(jsonData.result).to.be.above(0);",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"res.partner\",\n      \"create\",\n      [{\n        \"name\": \"Empresa Prueba API SA de CV\",\n        \"company_type\": \"company\",\n        \"type\": \"contact\",\n        \"bp_tipo_persona\": \"m\",\n        \"bp_es_cliente\": true,\n        \"vat\": \"EPA200101XX0\",\n        \"mobile\": \"3331234567\",\n        \"email\": \"contacto@empresaprueba.com\",\n        \"street\": \"Av. Empresarial 100\",\n        \"zip\": \"44100\",\n        \"city\": \"Guadalajara\",\n        \"country_id\": 156,\n        \"rel_estado\": 47,\n        \"bp_pais_residencia\": 156,\n        \"bp_tipo_sector\": \"priv\",\n        \"bp_tipo_cliente\": \"nuevo\",\n        \"vor_pld_monedas_reales2\": \"mn\",\n        \"vor_pld_instrumentos_reales2\": \"r3\",\n        \"vor_pld_metodos_reales\": \"trans\",\n        \"vor_pld_es_ppe\": false\n      }]\n    ]\n  },\n  \"id\": 31\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Crea partner Persona Moral. Usa company_type='company', bp_tipo_persona='m'. RFC de 12 caracteres. Sin CURP."
+          }
+        },
+        {
+          "name": "3.3 Actualizar Partner",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"res.partner\",\n      \"write\",\n      [[{{partner_id}}], {\n        \"mobile\": \"3339999999\",\n        \"laboral_empresa\": \"Nueva Empresa SA\",\n        \"laboral_salario_mensual\": 40000.00,\n        \"email\": \"nuevo.email@test.com\"\n      }]\n    ]\n  },\n  \"id\": 32\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Actualiza campos del partner. Solo enviar los campos que cambian. Retorna true si éxito."
+          }
+        },
+        {
+          "name": "3.4 Leer Partner Completo",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"res.partner\",\n      \"read\",\n      [[{{partner_id}}]],\n      {\"fields\": [\n        \"id\", \"name\", \"bp_curp\", \"vat\", \"bp_tipo_persona\",\n        \"bp_nom_primero\", \"bp_ape_paterno\", \"bp_ape_materno\",\n        \"bp_fecha_nacimiento\", \"bp_sexo\", \"email\", \"mobile\", \"phone\",\n        \"street\", \"zip\", \"city\", \"country_id\", \"rel_estado\",\n        \"bp_pais_nacimiento\", \"bp_nacionalidad\", \"bp_pais_residencia\",\n        \"bp_tipo_empleo\", \"bp_tipo_sector\", \"bp_tipo_cliente\",\n        \"vor_pld_nivel_riesgo\", \"vor_pld_riesgo_score_actual\",\n        \"vor_pld_es_ppe\", \"confirmado_en_oficios\", \"confirmado_en_persona_bloqueada\"\n      ]}\n    ]\n  },\n  \"id\": 33\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Lee todos los campos relevantes del partner incluyendo resultados PLD."
+          }
+        },
+        {
+          "name": "3.5 Crear o Actualizar Partner (Upsert) ⭐",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"res.partner\",\n      \"create_or_update_partner\",\n      [{\n        \"name\": \"Gonzalez Martinez Andres\",\n        \"company_type\": \"person\",\n        \"type\": \"contact\",\n        \"bp_tipo_persona\": \"f\",\n        \"bp_es_cliente\": true,\n        \"bp_curp\": \"GOMA950315HJCNRN08\",\n        \"vat\": \"GOMA950315AB1\",\n        \"bp_nom_primero\": \"Andres\",\n        \"bp_ape_paterno\": \"Gonzalez\",\n        \"bp_ape_materno\": \"Martinez\",\n        \"bp_fecha_nacimiento\": \"1995-03-15\",\n        \"bp_sexo\": \"m\",\n        \"bp_tipo_identificacion\": \"ine\",\n        \"bp_tiene_rfc\": true,\n        \"mobile\": \"3331234567\",\n        \"phone\": \"3339876543\",\n        \"email\": \"andres.test@email.com\",\n        \"street\": \"Calle Prueba API 456\",\n        \"zip\": \"44100\",\n        \"city\": \"Guadalajara\",\n        \"country_id\": 156,\n        \"rel_estado\": 47,\n        \"bp_pais_nacimiento\": 156,\n        \"bp_nacionalidad\": 156,\n        \"bp_pais_residencia\": 156,\n        \"bp_estado_nacimiento\": 47,\n        \"bp_tipo_empleo\": \"emp_priv\",\n        \"bp_tipo_sector\": \"priv\",\n        \"laboral_dir_pais\": 156,\n        \"laboral_rel_estado\": 47,\n        \"laboral_empresa\": \"Empresa Test SA\",\n        \"laboral_salario_mensual\": 35000.00,\n        \"bp_tipo_cliente\": \"nuevo\",\n        \"vor_pld_monedas_reales2\": \"mn\",\n        \"vor_pld_instrumentos_reales2\": \"r3\",\n        \"vor_pld_metodos_reales\": \"trans\",\n        \"vor_pld_es_ppe\": false\n      }]\n    ]\n  },\n  \"id\": 35\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/jsonrpc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "jsonrpc"
+              ]
+            },
+            "description": "**⭐ ENDPOINT RECOMENDADO PARA INTEGRACIÓN**\n\nCrea o actualiza un partner en una sola llamada (upsert).\n\n**Flujo interno:**\n1. Busca partner por CURP (prioridad para PF)\n2. Si no encuentra, busca por RFC (fallback)\n3. Si existe → actualiza con los datos enviados\n4. Si no existe → crea nuevo partner\n\n**Ventajas vs create/write separados:**\n- No necesitas implementar lógica de deduplicación del lado del cliente\n- 1 sola llamada en vez de 2 (search + create/write)\n- Retorna la operación realizada: 'created' o 'updated'\n\n**Respuesta:**\n```json\n{\n  \"result\": {\n    \"partner_id\": 123,\n    \"operation\": \"created\",\n    \"name\": \"Gonzalez Martinez Andres\",\n    \"bp_curp\": \"GOMA950315HJCNRN08\",\n    \"vat\": \"GOMA950315AB1\"\n  }\n}\n```\n\n**Requisito:** Debe enviar al menos `bp_curp` o `vat` (RFC).\n\n**Método Odoo:** `res.partner.create_or_update_partner(vals)`\n**Código:** `vor_credito_core/models/ext_partner.py:532`"
+          },
+          "response": []
+        },
+        {
+          "name": "3.6 Upsert Partner - Solo Identificación (sin catálogos)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"res.partner\",\n      \"create_or_update_partner\",\n      [{\n        \"name\": \"Gonzalez Martinez Andres\",\n        \"company_type\": \"person\",\n        \"type\": \"contact\",\n        \"bp_tipo_persona\": \"f\",\n        \"bp_es_cliente\": true,\n\n        \"bp_curp\": \"GOMA950315HJCNRN08\",\n        \"vat\": \"GOMA950315AB1\",\n        \"bp_nom_primero\": \"Andres\",\n        \"bp_ape_paterno\": \"Gonzalez\",\n        \"bp_ape_materno\": \"Martinez\",\n        \"bp_fecha_nacimiento\": \"1995-03-15\",\n        \"bp_sexo\": \"m\",\n        \"bp_tipo_identificacion\": \"ine\",\n\n        \"mobile\": \"3331234567\",\n        \"email\": \"andres.test@email.com\"\n      }]\n    ]\n  },\n  \"id\": 36\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/jsonrpc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "jsonrpc"
+              ]
+            },
+            "description": "**Creación mínima de partner - sin consultar catálogos.**\n\nEste request crea o actualiza un partner usando SOLO datos de identificación. No requiere IDs de catálogos (no Many2one), solo strings, fechas y selections estáticos.\n\n**Campos enviados (todos sin catálogo):**\n- `name` - Nombre completo (string)\n- `company_type` / `type` - Tipo de contacto (valores fijos)\n- `bp_tipo_persona` - Estático: `f`, `m`, `a`\n- `bp_curp` / `vat` - CURP y RFC (strings, llave de deduplicación)\n- `bp_nom_primero`, `bp_ape_paterno`, `bp_ape_materno` - Nombre desglosado (strings)\n- `bp_fecha_nacimiento` - Fecha (string YYYY-MM-DD)\n- `bp_sexo` - Estático: `m`, `f`, `i`\n- `bp_tipo_identificacion` - Estático: `ine`, `pasaporte`, `licencia`, `fm2`\n- `mobile`, `email` - Contacto (strings)\n\n**Campos que NO se envían (requieren catálogo):**\n- `country_id`, `rel_estado` - Dirección (SEPOMEX)\n- `bp_pais_nacimiento`, `bp_nacionalidad`, `bp_pais_residencia` - PLD origen\n- `vor_actividad_economica` - PLD actividad\n- `bp_banco` - Datos bancarios\n\n**Consecuencia:** El partner se crea correctamente pero NO puede ejecutar PLD scoring (faltan campos Many2one de origen y actividad). Estos campos se pueden completar después con un segundo llamado usando el mismo endpoint (el upsert detecta que ya existe por CURP y hace update).\n\n**Flujo recomendado en 2 pasos:**\n1. Crear partner con identificación (este request)\n2. Completar con catálogos cuando estén disponibles (request 3.5 con campos adicionales)\n\n**Método Odoo:** `res.partner.create_or_update_partner(vals)`"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "4. PLD (Scoring de Riesgo)",
+      "description": "Prevención de Lavado de Dinero. Ejecutar después de crear/actualizar partner con campos PLD completos.",
+      "item": [
+        {
+          "name": "4.1 Validar Campos PLD (Pre-check)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"res.partner\",\n      \"read\",\n      [[{{partner_id}}]],\n      {\"fields\": [\n        \"bp_tipo_persona\", \"bp_fecha_nacimiento\",\n        \"bp_pais_nacimiento\", \"bp_nacionalidad\", \"bp_pais_residencia\",\n        \"rel_estado\", \"bp_tipo_empleo\", \"vor_actividad_economica\",\n        \"bp_tipo_sector\", \"bp_tipo_cliente\",\n        \"vor_pld_monedas_reales2\", \"vor_pld_instrumentos_reales2\", \"vor_pld_metodos_reales\"\n      ]}\n    ]\n  },\n  \"id\": 40\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Lee los 13 campos mínimos para PLD. Verificar que NINGUNO sea false/null antes de ejecutar scoring. Si vor_actividad_economica es false, asignar una antes de calcular."
+          }
+        },
+        {
+          "name": "4.2 Ejecutar Scoring PLD",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"res.partner\",\n      \"calcular_riesgo_score\",\n      [[{{partner_id}}]]\n    ]\n  },\n  \"id\": 41\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Ejecuta la Matriz de Riesgo PLD (25 criterios).\n\nIMPORTANTE: Este método retorna null (normal). El resultado se lee con '4.3 Leer Resultado PLD'.\n\nCrea un registro vor.score.solicitud con los resultados detallados."
+          }
+        },
+        {
+          "name": "4.3 Leer Resultado PLD",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"res.partner\",\n      \"read\",\n      [[{{partner_id}}]],\n      {\"fields\": [\"vor_pld_nivel_riesgo\", \"vor_pld_riesgo_score_actual\", \"vor_pld_es_ppe\", \"confirmado_en_oficios\", \"confirmado_en_persona_bloqueada\"]}\n    ]\n  },\n  \"id\": 42\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Lee el resultado del scoring PLD del partner.\n\nvor_pld_nivel_riesgo: 'bajo' | 'medio' | 'alto' | false\nvor_pld_es_ppe: true/false (Persona Políticamente Expuesta)\nconfirmado_en_oficios: true/false (Listas negras)"
+          }
+        },
+        {
+          "name": "4.4 Leer Score Detallado",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.result && jsonData.result.length > 0) {",
+                  "    pm.collectionVariables.set('score_id', jsonData.result[0].id);",
+                  "    pm.test('Score encontrado: promedio=' + jsonData.result[0].promedio, function() {",
+                  "        pm.expect(jsonData.result[0].id).to.be.above(0);",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"vor.score.solicitud\",\n      \"search_read\",\n      [[[\"partner_id\", \"=\", {{partner_id}}], [\"type\", \"=\", \"matriz\"]]],\n      {\"fields\": [\"id\", \"promedio\", \"fecha\", \"state\", \"partner_id\"], \"order\": \"id desc\", \"limit\": 1}\n    ]\n  },\n  \"id\": 43\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Consulta el registro de score PLD detallado. El campo 'promedio' es el puntaje calculado."
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Préstamos",
+      "description": "Creación y gestión de préstamos en Acendes (vor.cre_prestamos).",
+      "item": [
+        {
+          "name": "5.1 Crear Préstamo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.result) {",
+                  "    pm.collectionVariables.set('prestamo_id', jsonData.result);",
+                  "    pm.test('Préstamo creado: ID=' + jsonData.result, function() {",
+                  "        pm.expect(jsonData.result).to.be.above(0);",
+                  "    });",
+                  "} else if (jsonData.error) {",
+                  "    pm.test('Error: ' + jsonData.error.data.message, function() {",
+                  "        pm.expect.fail(jsonData.error.data.message);",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"vor.cre_prestamos\",\n      \"create\",\n      [{\n        \"cliente\": {{partner_id}},\n        \"producto\": 5,\n        \"subproducto\": 4,\n        \"monto\": 50000.00,\n        \"fecha_desembolso\": \"2026-03-01\",\n        \"fecha_ini\": \"2026-04-01\",\n        \"periodicidad\": \"30\",\n        \"periodos\": 12,\n        \"tipo_interes\": \"0\",\n        \"tipo_calculo\": \"0\",\n        \"tasa\": 36.0,\n        \"tasa_iva\": 16.0,\n        \"comision_a\": 3.0,\n        \"tipo_comision_a\": \"ret\",\n        \"tipo_tasa_mora\": \"mult\",\n        \"multiplo_mora\": 1.5,\n        \"cargo_moratorio\": 3.0,\n        \"dias_gracia\": 0,\n        \"tipo_pago\": \"clabe\",\n        \"pago_clabe\": \"012180001234567890\"\n      }]\n    ]\n  },\n  \"id\": 50\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Crea préstamo en estado Borrador (state=0). Después ejecutar Calcular y Activar.\n\nCampos requeridos: cliente, producto, monto, tasa, periodicidad, periodos, fecha_desembolso, fecha_ini, tipo_interes."
+          }
+        },
+        {
+          "name": "5.2 Calcular Amortización",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"vor.cre_prestamos\",\n      \"calcular\",\n      [[{{prestamo_id}}]]\n    ]\n  },\n  \"id\": 51\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Genera la tabla de amortización. Cambia state a 1 (Calculado).\n\nEjecutar DESPUÉS de crear y ANTES de activar."
+          }
+        },
+        {
+          "name": "5.3 En Proceso (AP02)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"vor.cre_prestamos\",\n      \"ap02\",\n      [\n        [\n          {{prestamo_id}}\n        ]\n      ]\n    ]\n  },\n  \"id\": 52\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/jsonrpc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "jsonrpc"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "5.4 Activar Préstamo (AP03 - Desembolso)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"vor.cre_prestamos\",\n      \"ap03\",\n      [[{{prestamo_id}}]]\n    ]\n  },\n  \"id\": 53\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "⚠️ IRREVERSIBLE - Activa el préstamo y desembolsa.\n\nAcciones automáticas:\n- state → 10 (Activo)\n- Fija calendario de pagos\n- Crea evento de desembolso\n- Genera número de contrato\n- Calcula CAT\n- Activa cobranza"
+          }
+        },
+        {
+          "name": "5.5 Leer Préstamo",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"vor.cre_prestamos\",\n      \"read\",\n      [[{{prestamo_id}}]],\n      {\"fields\": [\"id\", \"name\", \"cliente\", \"monto\", \"tasa\", \"periodicidad\", \"periodos\", \"state\", \"fecha_desembolso\", \"fecha_ini\", \"saldo_exigible\", \"producto\", \"subproducto\"]}\n    ]\n  },\n  \"id\": 54\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Lee datos del préstamo incluyendo saldo actual y estado."
+          }
+        },
+        {
+          "name": "5.6 Listar Préstamos por Cliente",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"vor.cre_prestamos\",\n      \"search_read\",\n      [[[\"cliente\", \"=\", {{partner_id}}]]],\n      {\"fields\": [\"id\", \"name\", \"monto\", \"tasa\", \"state\", \"saldo_exigible\", \"fecha_desembolso\"], \"limit\": 50}\n    ]\n  },\n  \"id\": 55\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Lista todos los préstamos de un cliente."
+          }
+        },
+        {
+          "name": "5.7 Leer Tabla de Amortización",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"vor.cre_flujos\",\n      \"search_read\",\n      [[[\"credito\", \"=\", {{prestamo_id}}]]],\n      {\"fields\": [\"id\", \"consecutivo\", \"fecha\", \"capital\", \"interes\", \"iva_int\", \"pago_total\", \"saldo\", \"state\"], \"order\": \"consecutivo asc\"}\n    ]\n  },\n  \"id\": 56\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Lee la tabla de amortización completa del préstamo. Disponible después de calcular (state >= 1)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Movimientos",
+      "description": "Consulta de eventos y movimientos del préstamo.",
+      "item": [
+        {
+          "name": "6.1 Leer Movimientos del Préstamo",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [\n      \"{{db}}\",\n      {{uid}},\n      \"{{password}}\",\n      \"vor.cre_eventos\",\n      \"search_read\",\n      [[[\"credito\", \"=\", {{prestamo_id}}]]],\n      {\"fields\": [\"id\", \"name\", \"evento_tipo\", \"evento_subtipo\", \"fecha\", \"monto\", \"state\"], \"order\": \"fecha desc\", \"limit\": 50}\n    ]\n  },\n  \"id\": 60\n}"
+            },
+            "url": "{{base_url}}/jsonrpc",
+            "description": "Consulta eventos/movimientos del préstamo (desembolsos, pagos, castigos, etc.)."
+          }
+        }
+      ]
+    }
+  ]
+}
